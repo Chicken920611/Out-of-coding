@@ -1,0 +1,67 @@
+rules_version = '2';
+
+// GRID // ARCADE — Firestore rules for the shared leaderboards.
+//
+// Design: each game writes to its own collection (memory_scores,
+// typeclimb_scores, wordgrid_scores, pulse_scores). Anyone can read (so
+// everyone sees the shared leaderboard) and anyone can create a new score
+// document (so anyone can post a result without signing in). Nobody can
+// edit or delete a score once it's posted — this keeps the leaderboard
+// append-only, which avoids needing accounts/auth while still preventing
+// one visitor from tampering with or wiping another's scores.
+//
+// Trade-off: without auth, "create" can't verify who's actually posting,
+// so a determined visitor could write junk data. The field validation
+// below at least keeps documents well-formed (right types, reasonable
+// string lengths). If this ever needs to be harder to abuse, the next
+// step up is Firebase Anonymous Auth + rate limiting, not covered here.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isValidScoreDoc() {
+      return request.resource.data.keys().hasAll(['at', 'player'])
+        && request.resource.data.at is string
+        && request.resource.data.player is string
+        && request.resource.data.player.size() <= 24;
+    }
+
+    match /memory_scores/{doc} {
+      allow read: if true;
+      allow create: if isValidScoreDoc()
+        && request.resource.data.moves is int
+        && request.resource.data.durationMs is int;
+      allow update, delete: if false;
+    }
+
+    match /typeclimb_scores/{doc} {
+      allow read: if true;
+      allow create: if isValidScoreDoc()
+        && request.resource.data.longest is int
+        && request.resource.data.chars is int;
+      allow update, delete: if false;
+    }
+
+    match /wordgrid_scores/{doc} {
+      allow read: if true;
+      allow create: if isValidScoreDoc()
+        && request.resource.data.result in ['win', 'lose']
+        && request.resource.data.guesses is int
+        && request.resource.data.durationMs is int;
+      allow update, delete: if false;
+    }
+
+    match /pulse_scores/{doc} {
+      allow read: if true;
+      allow create: if isValidScoreDoc()
+        && request.resource.data.target is int
+        && request.resource.data.diffSec is number;
+      allow update, delete: if false;
+    }
+
+    // Deny everything else by default.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
