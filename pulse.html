@@ -234,16 +234,40 @@
     max-height: 168px; overflow-y: auto;
   }
   .history-row{
-    display:flex; justify-content: space-between; gap: 10px;
+    display:flex; flex-direction: column; align-items: stretch; gap: 4px;
     font-size: 11px; padding: 8px 10px;
-    background: var(--bg); border: 1px solid var(--line); border-radius: 6px;
+    background: var(--bg); border: 1px solid var(--line); border-left: 3px solid transparent; border-radius: 6px;
+    animation: row-in 0.25s ease;
   }
-  .history-row.best{ border-color: var(--theme); background: #f7f0fe; }
+  .history-row-main{ display:flex; justify-content: space-between; gap: 10px; }
+  .history-row.best{ border-color: var(--theme); border-left-color: var(--theme); background: #f7f0fe; }
+  .history-row.rank-2{ border-color: var(--line-strong); background: #f4f5fa; }
+  .history-row.rank-3{ border-color: #d9a066; background: #fbf0e4; }
+  .history-row.mine{ border-left-color: var(--theme); }
   .history-row.mine .history-time{ color: var(--theme); font-weight: bold; }
+  .history-row.pinned{ border-left-width: 4px; box-shadow: 0 1px 4px rgba(31,35,51,0.06); }
   .history-time{ color: var(--text-dim); }
   .history-mid{ color: var(--text); }
   .history-dur{ color: var(--theme); font-weight: bold; }
+  .history-when{ font-size: 10px; color: var(--text-dim); text-align: right; letter-spacing: 0.3px; }
   .history-empty{ font-size: 11px; color: var(--text-dim); padding: 10px 2px; }
+  .pinned-slot:not(:empty){ margin-bottom: 8px; }
+  .pinned-label{ font-size: 9px; letter-spacing: 1px; color: var(--text-dim); margin: 0 0 4px 2px; text-transform: uppercase; }
+  .history-row.skeleton{
+    height: 38px; border: 1px solid var(--line);
+    background: linear-gradient(90deg, #eef0f7 25%, #f7f8fc 37%, #eef0f7 63%);
+    background-size: 400% 100%; animation: skeleton-pulse 1.4s ease infinite;
+  }
+  .show-more-btn{
+    display:block; margin: 8px auto 0; background:none;
+    border: 1px dashed var(--line-strong); color: var(--text-dim);
+    font-family: inherit; font-size: 10px; letter-spacing: 1px;
+    padding: 6px 14px; border-radius: 4px; cursor: pointer;
+  }
+  .show-more-btn:hover{ color: var(--text); border-color: var(--theme); }
+  .show-more-btn[hidden]{ display:none; }
+  @keyframes row-in{ from{ opacity:0; transform: translateY(-3px); } to{ opacity:1; transform:none; } }
+  @keyframes skeleton-pulse{ 0%{ background-position: 200% 0; } 100%{ background-position: -200% 0; } }
 
   @media (prefers-reduced-motion: reduce){
     * { transition: none !important; animation: none !important; }
@@ -318,7 +342,9 @@
           <span class="history-title">TOP ATTEMPTS</span>
           <span class="player-badge">Playing as <b id="playerNameDisplay">—</b> · <button class="reset-link" id="changeNameBtn">change</button></span>
         </div>
+        <div class="pinned-slot" id="pinnedSlot"></div>
         <ul class="history-list" id="historyList"></ul>
+        <button class="show-more-btn" id="showMoreBtn" hidden></button>
       </div>
     </div>
   </div>
@@ -342,6 +368,8 @@
   const resultDetailEl = document.getElementById('resultDetail');
   const resetBtn = document.getElementById('resetBtn');
   const historyList = document.getElementById('historyList');
+  const pinnedSlot = document.getElementById('pinnedSlot');
+  const showMoreBtn = document.getElementById('showMoreBtn');
   const playerNameDisplayEl = document.getElementById('playerNameDisplay');
   const changeNameBtn = document.getElementById('changeNameBtn');
   const playedEl = document.getElementById('played');
@@ -359,6 +387,9 @@
   let safetyHandle = null;
   let history = [];
   let playerName = 'Player';
+  let historyRenderKey = '';
+  let showAllRows = false;
+  let relativeTimeHandle = null;
 
   // --- shared leaderboard (Firestore) ---
   // Scores post to a shared collection everyone reads from, so the
@@ -366,19 +397,60 @@
   // firestore.rules: writes are create-only (no edit/delete), so there's
   // no "clear history" here anymore — it's an append-only shared board.
 
+  function formatRelativeTime(iso){
+    const then = new Date(iso).getTime();
+    if(Number.isNaN(then)) return '';
+    const diffSec = Math.max(0, Math.floor((Date.now() - then) / 1000));
+    if(diffSec < 5) return 'just now';
+    if(diffSec < 60) return diffSec + 's ago';
+    const diffMin = Math.floor(diffSec / 60);
+    if(diffMin < 60) return diffMin + 'm ago';
+    const diffHr = Math.floor(diffMin / 60);
+    if(diffHr < 24) return diffHr + 'h ago';
+    const diffDay = Math.floor(diffHr / 24);
+    if(diffDay < 7) return diffDay + 'd ago';
+    return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  }
+
+  function refreshRelativeTimes(){
+    historyList.querySelectorAll('[data-at]').forEach(el => { el.textContent = formatRelativeTime(el.dataset.at); });
+    pinnedSlot.querySelectorAll('[data-at]').forEach(el => { el.textContent = formatRelativeTime(el.dataset.at); });
+  }
+
+  function renderSkeleton(){
+    historyList.innerHTML = Array.from({ length: 4 }).map(() => '<li class="history-row skeleton"></li>').join('');
+  }
+
+  function rankBadge(i){
+    return i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : ('#' + (i + 1));
+  }
+
+  function rankClass(i){
+    return i === 0 ? ' best' : i === 1 ? ' rank-2' : i === 2 ? ' rank-3' : '';
+  }
+
   function attachLeaderboardListener(){
+    renderSkeleton();
     db.collection(COLLECTION)
       .orderBy('at', 'desc')
       .limit(200)
       .onSnapshot(snapshot => {
-        history = snapshot.docs.map(doc => doc.data());
+        history = snapshot.docs.map(doc => ({ _id: doc.id, ...doc.data() }));
         renderHistory();
         renderStats();
       }, err => {
         console.error('Leaderboard sync error:', err);
+        historyRenderKey = '';
         historyList.innerHTML = '<li class="history-empty">Couldn\'t reach the leaderboard — check firebase-config.js.</li>';
       });
+    if(!relativeTimeHandle) relativeTimeHandle = setInterval(refreshRelativeTimes, 30000);
   }
+
+  showMoreBtn.addEventListener('click', () => {
+    showAllRows = !showAllRows;
+    historyRenderKey = '';
+    renderHistory();
+  });
 
   async function postScore(entry){
     try{
@@ -415,28 +487,62 @@
   }
 
   function renderHistory(){
-    historyList.innerHTML = '';
     if(history.length === 0){
-      const empty = document.createElement('li');
-      empty.className = 'history-empty';
-      empty.textContent = 'No attempts yet — take a shot at it.';
-      historyList.appendChild(empty);
+      pinnedSlot.innerHTML = '';
+      showMoreBtn.hidden = true;
+      historyRenderKey = 'empty';
+      historyList.innerHTML = '<li class="history-empty">No attempts yet — take a shot at it.</li>';
       return;
     }
     // Rank best-to-worst: closest to target first. Sorts a copy — the
     // underlying history array stays chronological.
-    const ranked = history.slice().sort((a, b) => a.diffSec - b.diffSec).slice(0, HISTORY_LIMIT);
+    const sorted = history.slice().sort((a, b) => a.diffSec - b.diffSec);
+    const visibleLimit = showAllRows ? sorted.length : HISTORY_LIMIT;
+    const ranked = sorted.slice(0, visibleLimit);
 
-    ranked.forEach((entry, i) => {
-      const li = document.createElement('li');
-      const isMine = entry.player === playerName;
-      li.className = 'history-row' + (i === 0 ? ' best' : '') + (isMine ? ' mine' : '');
-      li.innerHTML = `
-        <span class="history-time">#${i + 1} · ${(entry.player || 'Player').slice(0, 16)}</span>
-        <span class="history-mid">target ${entry.target}s</span>
-        <span class="history-dur">±${entry.diffSec.toFixed(2)}s</span>`;
-      historyList.appendChild(li);
-    });
+    // Pinned "your best" row — shown above the numbered ranking so you
+    // don't have to scroll to find yourself.
+    const myEntries = sorted.filter(h => h.player === playerName);
+    if(myEntries.length){
+      const mine = myEntries[0];
+      const myRank = sorted.indexOf(mine) + 1;
+      pinnedSlot.innerHTML = `
+        <div class="pinned-label">Your best · #${myRank} overall</div>
+        <li class="history-row mine pinned">
+          <div class="history-row-main">
+            <span class="history-time">★ ${(mine.player || 'Player').slice(0, 16)}</span>
+            <span class="history-mid">target ${mine.target}s</span>
+            <span class="history-dur">±${mine.diffSec.toFixed(2)}s</span>
+          </div>
+          <div class="history-when" data-at="${mine.at}">${formatRelativeTime(mine.at)}</div>
+        </li>`;
+    } else {
+      pinnedSlot.innerHTML = '';
+    }
+
+    const rankedKey = (showAllRows ? 'all:' : 'top:') + ranked.map(e => e._id || e.at).join(',');
+    if(rankedKey === historyRenderKey){
+      refreshRelativeTimes();
+    } else {
+      historyRenderKey = rankedKey;
+      historyList.innerHTML = '';
+      ranked.forEach((entry, i) => {
+        const li = document.createElement('li');
+        const isMine = entry.player === playerName;
+        li.className = 'history-row' + rankClass(i) + (isMine ? ' mine' : '');
+        li.innerHTML = `
+          <div class="history-row-main">
+            <span class="history-time">${rankBadge(i)} · ${(entry.player || 'Player').slice(0, 16)}</span>
+            <span class="history-mid">target ${entry.target}s</span>
+            <span class="history-dur">±${entry.diffSec.toFixed(2)}s</span>
+          </div>
+          <div class="history-when" data-at="${entry.at}">${formatRelativeTime(entry.at)}</div>`;
+        historyList.appendChild(li);
+      });
+    }
+
+    showMoreBtn.hidden = sorted.length <= HISTORY_LIMIT;
+    showMoreBtn.textContent = showAllRows ? 'Show top 10' : `Show all (${sorted.length})`;
   }
 
   // --- game phases ---
