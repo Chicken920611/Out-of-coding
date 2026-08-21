@@ -48,6 +48,8 @@
     padding: 28px;
     position: relative;
     box-shadow: 0 10px 30px rgba(31,35,51,0.06);
+    display: flex;
+    flex-direction: column;
   }
 
   .layout{
@@ -59,17 +61,22 @@
   .side-col{ min-width: 0; }
 
   @media (min-width: 860px){
+    .cabinet{ min-height: min(760px, 86vh); }
     .layout{
       display: grid;
       grid-template-columns: 1.3fr 0.9fr;
       gap: 36px;
-      align-items: start;
+      align-items: stretch;
+      flex: 1;
+      min-height: 0;
     }
-    .stage{ min-height: 320px; }
+    .main-col{ display: flex; flex-direction: column; min-height: 0; }
+    .stage{ flex: 1; min-height: 320px; }
     .word-display{ font-size: clamp(28px, 3.6vw, 46px); }
     .type-input{ max-width: 380px; font-size: 20px; }
-    .history{ margin-top: 0; border-top: none; padding-top: 0; }
-    .history-list{ max-height: 420px; }
+    .side-col{ display: flex; flex-direction: column; min-height: 0; }
+    .history{ margin-top: 0; border-top: none; padding-top: 0; flex: 1; display: flex; flex-direction: column; min-height: 0; }
+    .history-list{ flex: 1; max-height: none; min-height: 0; }
   }
 
   header{
@@ -276,7 +283,7 @@
   .history-list{
     list-style:none; margin:0; padding:0;
     display:flex; flex-direction:column; gap: 6px;
-    max-height: 168px; overflow-y: auto;
+    max-height: min(300px, 42vh); overflow-y: auto;
   }
   .history-row{
     display:flex; flex-direction: column; align-items: stretch; gap: 4px;
@@ -285,19 +292,44 @@
     animation: row-in 0.25s ease;
   }
   .history-row-main{ display:flex; justify-content: space-between; gap: 10px; }
+  .history-stats{ font-size: 10px; color: var(--text-dim); }
   .history-row.best{ border-color: var(--theme); border-left-color: var(--theme); background: #eefcf3; }
   .history-row.rank-2{ border-color: var(--line-strong); background: #f4f5fa; }
   .history-row.rank-3{ border-color: #d9a066; background: #fbf0e4; }
   .history-row.mine{ border-left-color: var(--theme); }
   .history-row.mine .history-time{ color: var(--theme); font-weight: bold; }
-  .history-row.pinned{ border-left-width: 4px; box-shadow: 0 1px 4px rgba(31,35,51,0.06); }
   .history-time{ color: var(--text-dim); }
   .history-mid{ color: var(--text); }
   .history-dur{ color: var(--theme); font-weight: bold; }
   .history-when{ font-size: 10px; color: var(--text-dim); text-align: right; letter-spacing: 0.3px; }
   .history-empty{ font-size: 11px; color: var(--text-dim); padding: 10px 2px; }
-  .pinned-slot:not(:empty){ margin-bottom: 8px; }
-  .pinned-label{ font-size: 9px; letter-spacing: 1px; color: var(--text-dim); margin: 0 0 4px 2px; text-transform: uppercase; }
+  .rank-callout{
+    display:flex; align-items:center; gap: 12px;
+    padding: 10px 12px;
+    border: 1px solid var(--theme);
+    border-radius: 8px;
+    background: linear-gradient(135deg, rgba(31,179,90,0.12), rgba(31,179,90,0.02));
+    margin-bottom: 10px;
+    flex-shrink: 0;
+  }
+  .rank-callout-badge{
+    font-family: 'Press Start 2P', monospace;
+    font-size: 15px;
+    line-height: 1;
+    color: var(--theme);
+    background: #ffffff;
+    border: 1px solid var(--theme);
+    border-radius: 6px;
+    padding: 8px 6px;
+    min-width: 44px;
+    text-align: center;
+    flex-shrink: 0;
+  }
+  .rank-callout-body{ min-width: 0; }
+  .rank-callout-label{ font-size: 9px; letter-spacing: 1px; color: var(--text-dim); text-transform: uppercase; margin-bottom: 3px; }
+  .rank-callout-stats{ font-size: 11px; color: var(--text); display:flex; flex-wrap:wrap; gap: 4px 8px; align-items:baseline; }
+  .rank-callout-stats b{ color: var(--theme); }
+  .rank-callout-stats .history-when{ font-size: 10px; text-align: left; }
   .history-row.skeleton{
     height: 38px; border: 1px solid var(--line);
     background: linear-gradient(90deg, #eef0f7 25%, #f7f8fc 37%, #eef0f7 63%);
@@ -308,6 +340,7 @@
     border: 1px dashed var(--line-strong); color: var(--text-dim);
     font-family: inherit; font-size: 10px; letter-spacing: 1px;
     padding: 6px 14px; border-radius: 4px; cursor: pointer;
+    flex-shrink: 0;
   }
   .show-more-btn:hover{ color: var(--text); border-color: var(--theme); }
   .show-more-btn[hidden]{ display:none; }
@@ -605,22 +638,25 @@
     const visibleLimit = showAllRows ? sorted.length : HISTORY_LIMIT;
     const ranked = sorted.slice(0, visibleLimit);
 
-    // Pinned "your best" row — shown above the numbered ranking so you
-    // don't have to scroll to find yourself.
+    // Pinned "your best" callout — shown above the numbered ranking so
+    // you don't have to scroll to find yourself.
     const myEntries = sorted.filter(h => h.player === playerName);
     if(myEntries.length){
       const mine = myEntries[0];
       const myRank = sorted.indexOf(mine) + 1;
       pinnedSlot.innerHTML = `
-        <div class="pinned-label">Your best · #${myRank} overall</div>
-        <li class="history-row mine pinned">
-          <div class="history-row-main">
-            <span class="history-time">★ ${(mine.player || 'Player').slice(0, 16)}</span>
-            <span class="history-mid">${mine.chars} char${mine.chars === 1 ? '' : 's'} typed</span>
-            <span class="history-dur">${mine.longest} letters</span>
+        <div class="rank-callout">
+          <div class="rank-callout-badge">#${myRank}</div>
+          <div class="rank-callout-body">
+            <div class="rank-callout-label">Your rank overall</div>
+            <div class="rank-callout-stats">
+              <span><b>${mine.completed}</b> word${mine.completed === 1 ? '' : 's'}</span>
+              <span><b>${mine.chars}</b> char${mine.chars === 1 ? '' : 's'} typed</span>
+              <span>${mine.longest} letters</span>
+              <span class="history-when" data-at="${mine.at}">${formatRelativeTime(mine.at)}</span>
+            </div>
           </div>
-          <div class="history-when" data-at="${mine.at}">${formatRelativeTime(mine.at)}</div>
-        </li>`;
+        </div>`;
     } else {
       pinnedSlot.innerHTML = '';
     }
@@ -638,9 +674,9 @@
         li.innerHTML = `
           <div class="history-row-main">
             <span class="history-time">${rankBadge(i)} · ${(entry.player || 'Player').slice(0, 16)}</span>
-            <span class="history-mid">${entry.chars} char${entry.chars === 1 ? '' : 's'} typed</span>
             <span class="history-dur">${entry.longest} letters</span>
           </div>
+          <div class="history-stats">${entry.completed} word${entry.completed === 1 ? '' : 's'} · ${entry.chars} char${entry.chars === 1 ? '' : 's'} typed</div>
           <div class="history-when" data-at="${entry.at}">${formatRelativeTime(entry.at)}</div>`;
         historyList.appendChild(li);
       });
