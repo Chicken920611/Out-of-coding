@@ -76,6 +76,7 @@
     .type-input{ max-width: 380px; font-size: 20px; }
     .side-col{ display: flex; flex-direction: column; min-height: 0; }
     .history{ margin-top: 0; border-top: none; padding-top: 0; flex: 1; display: flex; flex-direction: column; min-height: 0; }
+    .history-panel{ flex: 1; min-height: 0; }
     .history-list{ flex: 1; max-height: none; min-height: 0; }
   }
 
@@ -285,10 +286,19 @@
     display:flex; flex-direction:column; gap: 6px;
     max-height: min(300px, 42vh); overflow-y: auto;
   }
+  .history-panel{
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+  }
+  .history-panel .history-list{ padding-right: 2px; }
   .history-row{
     display:flex; flex-direction: column; align-items: stretch; gap: 4px;
     font-size: 11px; padding: 8px 10px;
-    background: var(--bg); border: 1px solid var(--line); border-left: 3px solid transparent; border-radius: 6px;
+    background: var(--panel); border: 1px solid var(--line); border-left: 3px solid transparent; border-radius: 6px;
     animation: row-in 0.25s ease;
   }
   .history-row-main{ display:flex; justify-content: space-between; gap: 10px; }
@@ -308,7 +318,7 @@
     padding: 10px 12px;
     border: 1px solid var(--theme);
     border-radius: 8px;
-    background: linear-gradient(135deg, rgba(31,179,90,0.12), rgba(31,179,90,0.02));
+    background: linear-gradient(135deg, rgba(31,179,90,0.12), rgba(31,179,90,0.02)), var(--panel);
     margin-bottom: 10px;
     flex-shrink: 0;
   }
@@ -423,9 +433,11 @@
           <span class="history-title">TOP RUNS</span>
           <span class="player-badge">Playing as <b id="playerNameDisplay">—</b> · <button class="reset-link" id="changeNameBtn">change</button></span>
         </div>
-        <div class="pinned-slot" id="pinnedSlot"></div>
-        <ul class="history-list" id="historyList"></ul>
-        <button class="show-more-btn" id="showMoreBtn" hidden></button>
+        <div class="history-panel">
+          <div class="pinned-slot" id="pinnedSlot"></div>
+          <ul class="history-list" id="historyList"></ul>
+          <button class="show-more-btn" id="showMoreBtn" hidden></button>
+        </div>
       </div>
     </div>
   </div>
@@ -578,6 +590,13 @@
     return i === 0 ? ' best' : i === 1 ? ' rank-2' : i === 2 ? ' rank-3' : '';
   }
 
+  // Standard typing-speed convention: 1 "word" = 5 characters. The round
+  // is always ROUND_SECONDS long, so this can be derived from the chars
+  // total already stored on every entry — no schema change needed.
+  function wpmOf(entry){
+    return Math.round(((entry.chars / 5) / (ROUND_SECONDS / 60)) * 10) / 10;
+  }
+
   function attachLeaderboardListener(){
     renderSkeleton();
     db.collection(COLLECTION)
@@ -628,12 +647,14 @@
       historyList.innerHTML = '<li class="history-empty">No runs yet — finish a round to log one.</li>';
       return;
     }
-    // Rank best-to-worst: longest word first, more characters typed
-    // breaks ties. Sorts a copy — the underlying history array stays
-    // as delivered by Firestore.
+    // Rank best-to-worst: highest words-per-minute first — that's the
+    // headline "typing speed" stat — with longest word as the tiebreak.
+    // Sorts a copy; the underlying history array stays as delivered by
+    // Firestore.
     const sorted = history.slice().sort((a, b) => {
-      if(a.longest !== b.longest) return b.longest - a.longest;
-      return b.chars - a.chars;
+      const w = wpmOf(b) - wpmOf(a);
+      if(w !== 0) return w;
+      return b.longest - a.longest;
     });
     const visibleLimit = showAllRows ? sorted.length : HISTORY_LIMIT;
     const ranked = sorted.slice(0, visibleLimit);
@@ -650,8 +671,9 @@
           <div class="rank-callout-body">
             <div class="rank-callout-label">Your rank overall</div>
             <div class="rank-callout-stats">
-              <span><b>${mine.completed}</b> word${mine.completed === 1 ? '' : 's'}</span>
-              <span><b>${mine.chars}</b> char${mine.chars === 1 ? '' : 's'} typed</span>
+              <span><b>${wpmOf(mine)}</b> wpm</span>
+              <span>${mine.completed} word${mine.completed === 1 ? '' : 's'}</span>
+              <span>${mine.chars} char${mine.chars === 1 ? '' : 's'} typed</span>
               <span>${mine.longest} letters</span>
               <span class="history-when" data-at="${mine.at}">${formatRelativeTime(mine.at)}</span>
             </div>
@@ -674,9 +696,9 @@
         li.innerHTML = `
           <div class="history-row-main">
             <span class="history-time">${rankBadge(i)} · ${(entry.player || 'Player').slice(0, 16)}</span>
-            <span class="history-dur">${entry.longest} letters</span>
+            <span class="history-dur">${wpmOf(entry)} wpm</span>
           </div>
-          <div class="history-stats">${entry.completed} word${entry.completed === 1 ? '' : 's'} · ${entry.chars} char${entry.chars === 1 ? '' : 's'} typed</div>
+          <div class="history-stats">${entry.completed} word${entry.completed === 1 ? '' : 's'} · ${entry.chars} char${entry.chars === 1 ? '' : 's'} typed · ${entry.longest} letters</div>
           <div class="history-when" data-at="${entry.at}">${formatRelativeTime(entry.at)}</div>`;
         historyList.appendChild(li);
       });
