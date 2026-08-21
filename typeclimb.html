@@ -349,6 +349,12 @@
   .show-more-btn[hidden]{ display:none; }
   @keyframes row-in{ from{ opacity:0; transform: translateY(-3px); } to{ opacity:1; transform:none; } }
   @keyframes skeleton-pulse{ 0%{ background-position: 200% 0; } 100%{ background-position: -200% 0; } }
+  .history-row.just-played{ animation: just-played-pulse 1.8s ease; }
+  @keyframes just-played-pulse{
+    0%{ box-shadow: 0 0 0 0 rgba(31,179,90,0.45); }
+    35%{ box-shadow: 0 0 0 6px rgba(31,179,90,0.12); }
+    100%{ box-shadow: 0 0 0 0 rgba(31,179,90,0); }
+  }
 
   /* Desktop layout — placed last so it correctly wins the cascade over
      the unconditional base rules above (same selectors, same
@@ -562,13 +568,14 @@
   const COLLECTION = 'typeclimb_scores';
   const BAGS_KEY = 'grid-type-bags';
 
-  let currentWord, currentLength, wordsCompleted, totalChars, longestCompleted, timeRemaining, timerHandle, running;
+  let currentWord, currentLength, wordsCompleted, totalChars, longestCompleted, timeRemaining, timerHandle, running, hasStartedTyping;
   let history = [];
   let playerName = 'Player';
   let historyRenderKey = '';
   let expanded = false;
   let relativeTimeHandle = null;
   let resizeHandle = null;
+  let pendingScrollAt = null;
 
   // --- shared leaderboard (Firestore) ---
   // Scores post to a shared collection everyone reads from, so the
@@ -635,6 +642,7 @@
   showMoreBtn.addEventListener('click', () => {
     expanded = !expanded;
     historyList.classList.toggle('expanded', expanded);
+    if(!expanded) historyList.scrollTop = 0;
     refreshOverflowState();
   });
 
@@ -729,6 +737,7 @@
         const li = document.createElement('li');
         const isMine = entry.player === playerName;
         li.className = 'history-row' + rankClass(i) + (isMine ? ' mine' : '');
+        li.dataset.entryAt = entry.at;
         li.innerHTML = `
           <div class="history-row-main">
             <span class="history-time">${rankBadge(i)} · ${(entry.player || 'Player').slice(0, 16)}</span>
@@ -741,7 +750,28 @@
     }
 
     // Measure after the browser has laid the rows out.
-    requestAnimationFrame(refreshOverflowState);
+    requestAnimationFrame(() => {
+      scrollToPendingEntry();
+      refreshOverflowState();
+    });
+  }
+
+  // After you finish a round, jump the leaderboard to wherever this run
+  // landed — expanding the panel if it's outside the collapsed view —
+  // so you see your rank without hunting for it. Only fires once per
+  // submitted run (pendingScrollAt is cleared as soon as it's found).
+  function scrollToPendingEntry(){
+    if(!pendingScrollAt) return;
+    const row = historyList.querySelector(`.history-row[data-entry-at="${pendingScrollAt}"]`);
+    if(!row) return; // not synced from Firestore yet — try again next render
+    pendingScrollAt = null;
+    if(!expanded){
+      expanded = true;
+      historyList.classList.add('expanded');
+    }
+    row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    row.classList.add('just-played');
+    setTimeout(() => row.classList.remove('just-played'), 2200);
   }
 
   // --- word selection: a "shuffle bag" per length so words don't repeat
@@ -861,6 +891,7 @@
     longestCompleted = 0;
     timeRemaining = ROUND_SECONDS;
     running = true;
+    hasStartedTyping = false;
 
     timeLeftEl.textContent = timeRemaining;
     timeLeftEl.classList.remove('time-low');
@@ -870,7 +901,9 @@
     nextWord();
     typeInput.disabled = false;
     typeInput.focus();
-    startTimer();
+    // Timer doesn't start yet — it kicks in on the first keystroke, in
+    // the input listener below, so reading the word doesn't cost you
+    // any of your 30 seconds.
   }
 
   function partialCorrectChars(){
@@ -894,10 +927,13 @@
     totalChars += partialCorrectChars();
 
     const prevBest = bestLength();
-    const entry = { at: new Date().toISOString(), longest: longestCompleted, completed: wordsCompleted, chars: totalChars };
+    const enteredAt = new Date().toISOString();
+    const entry = { at: enteredAt, longest: longestCompleted, completed: wordsCompleted, chars: totalChars };
+    pendingScrollAt = enteredAt;
     await postScore(entry);
     // history/renderHistory/updateBest refresh automatically via the
-    // Firestore onSnapshot listener once this write lands.
+    // Firestore onSnapshot listener once this write lands — that render
+    // pass is also what scrolls the leaderboard to this run's row.
 
     resultLengthEl.textContent = longestCompleted;
     const isNewBest = prevBest === null || longestCompleted > prevBest;
@@ -923,7 +959,13 @@
     }
   }
 
-  typeInput.addEventListener('input', updateLiveFeedback);
+  typeInput.addEventListener('input', () => {
+    if(running && !hasStartedTyping && typeInput.value.length > 0){
+      hasStartedTyping = true;
+      startTimer();
+    }
+    updateLiveFeedback();
+  });
   typeInput.addEventListener('keydown', (e) => {
     if(e.key === 'Enter'){
       e.preventDefault();
