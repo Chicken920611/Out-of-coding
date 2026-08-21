@@ -61,24 +61,6 @@
   .main-col{ min-width: 0; }
   .side-col{ min-width: 0; }
 
-  @media (min-width: 820px){
-    .cabinet{ min-height: min(760px, 86vh); }
-    .layout{
-      display: grid;
-      grid-template-columns: 1fr 300px;
-      gap: 36px;
-      align-items: stretch;
-      flex: 1;
-      min-height: 0;
-    }
-    .main-col{ display: flex; flex-direction: column; justify-content: center; min-height: 0; }
-    .board{ max-width: 420px; margin: 0 auto; }
-    .card-face{ font-size: clamp(24px, 3vw, 36px); }
-    .side-col{ display: flex; flex-direction: column; min-height: 0; }
-    .history{ margin-top: 0; border-top: none; padding-top: 0; flex: 1; display: flex; flex-direction: column; min-height: 0; }
-    .history-list{ flex: 1; max-height: none; min-height: 0; }
-  }
-
   header{
     display:flex;
     justify-content:space-between;
@@ -159,9 +141,30 @@
     display:flex;
     flex-direction:column;
     gap: 6px;
-    max-height: min(300px, 42vh);
-    overflow-y: auto;
+    overflow-y: hidden;
+    position: relative;
   }
+  @media (max-width: 819px){
+    .history-list{ max-height: min(300px, 42vh); }
+  }
+  .history-list.expanded{ overflow-y: auto; }
+  .history-list.has-overflow:not(.expanded)::after{
+    content: '';
+    position: absolute;
+    left: 0; right: 2px; bottom: 0;
+    height: 28px;
+    background: linear-gradient(to bottom, rgba(243,245,251,0), var(--bg));
+    pointer-events: none;
+  }
+  .history-panel{
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+  }
+  .history-panel .history-list{ padding-right: 2px; }
   .history-row{
     display:flex;
     flex-direction: column;
@@ -169,7 +172,7 @@
     gap: 4px;
     font-size: 11px;
     padding: 8px 10px;
-    background: var(--bg);
+    background: var(--panel);
     border: 1px solid var(--line);
     border-left: 3px solid transparent;
     border-radius: 6px;
@@ -199,7 +202,7 @@
     padding: 10px 12px;
     border: 1px solid var(--cyan);
     border-radius: 8px;
-    background: linear-gradient(135deg, rgba(255,106,0,0.10), rgba(255,106,0,0.02));
+    background: linear-gradient(135deg, rgba(255,106,0,0.10), rgba(255,106,0,0.02)), var(--panel);
     margin-bottom: 10px;
     flex-shrink: 0;
   }
@@ -383,6 +386,30 @@
   }
   .reset-link:hover{ color: var(--text); }
 
+  /* Desktop layout — placed last so it correctly wins the cascade over
+     the unconditional base rules above (same selectors, same
+     specificity: source order decides, and this needs to win when the
+     media query matches). */
+  @media (min-width: 820px){
+    .cabinet{ height: min(760px, 86vh); }
+    .layout{
+      display: grid;
+      grid-template-columns: 1fr 300px;
+      grid-template-rows: 1fr;
+      gap: 36px;
+      align-items: stretch;
+      flex: 1;
+      min-height: 0;
+    }
+    .main-col{ display: flex; flex-direction: column; justify-content: center; min-height: 0; }
+    .board{ max-width: 420px; margin: 0 auto; }
+    .card-face{ font-size: clamp(24px, 3vw, 36px); }
+    .side-col{ display: flex; flex-direction: column; min-height: 0; }
+    .history{ margin-top: 0; border-top: none; padding-top: 0; flex: 1; display: flex; flex-direction: column; min-height: 0; }
+    .history-panel{ flex: 1; min-height: 0; }
+    .history-list{ flex: 1; max-height: none; min-height: 0; }
+  }
+
   @media (prefers-reduced-motion: reduce){
     .card-inner{ transition: none; }
   }
@@ -442,9 +469,11 @@
           <span class="history-title">TOP RUNS</span>
           <span class="player-badge">Playing as <b id="playerNameDisplay">—</b> · <button class="reset-link" id="changeNameBtn">change</button></span>
         </div>
-        <div class="pinned-slot" id="pinnedSlot"></div>
-        <ul class="history-list" id="historyList"></ul>
-        <button class="show-more-btn" id="showMoreBtn" hidden></button>
+        <div class="history-panel">
+          <div class="pinned-slot" id="pinnedSlot"></div>
+          <ul class="history-list" id="historyList"></ul>
+          <button class="show-more-btn" id="showMoreBtn" hidden></button>
+        </div>
       </div>
     </div>
   </div>
@@ -486,15 +515,15 @@
   ];
 
   const COLLECTION = 'memory_scores';
-  const HISTORY_LIMIT = 10;
 
   let cards, flipped, matchedCount, moves, locked;
   let startTime, elapsedMs, timerHandle;
   let history = [];
   let playerName = 'Player';
   let historyRenderKey = '';
-  let showAllRows = false;
+  let expanded = false;
   let relativeTimeHandle = null;
+  let resizeHandle = null;
 
   // --- shared leaderboard (Firestore) ---
   // Scores post to a shared collection everyone reads from, so the
@@ -552,9 +581,26 @@
   }
 
   showMoreBtn.addEventListener('click', () => {
-    showAllRows = !showAllRows;
-    historyRenderKey = '';
-    renderHistory();
+    expanded = !expanded;
+    historyList.classList.toggle('expanded', expanded);
+    refreshOverflowState();
+  });
+
+  // The panel's height is fixed by the flex layout, not by how many rows
+  // are in it — so instead of guessing a row count that "should" fit, we
+  // render every entry and let the box itself tell us whether it overflowed.
+  // Collapsed = clipped (overflow: hidden); expanded = scrollable. This
+  // adapts automatically to any screen size or font without extra math.
+  function refreshOverflowState(){
+    const overflowing = historyList.scrollHeight - historyList.clientHeight > 2;
+    historyList.classList.toggle('has-overflow', overflowing);
+    showMoreBtn.hidden = !overflowing && !expanded;
+    showMoreBtn.textContent = expanded ? 'Show top' : `Show all (${history.length})`;
+  }
+
+  window.addEventListener('resize', () => {
+    clearTimeout(resizeHandle);
+    resizeHandle = setTimeout(refreshOverflowState, 150);
   });
 
   async function postScore(entry){
@@ -601,8 +647,6 @@
       if(a.moves !== b.moves) return a.moves - b.moves;
       return a.durationMs - b.durationMs;
     });
-    const visibleLimit = showAllRows ? sorted.length : HISTORY_LIMIT;
-    const ranked = sorted.slice(0, visibleLimit);
 
     // Pinned "your best" callout — shown above the numbered ranking so
     // you don't have to scroll to find yourself.
@@ -626,13 +670,16 @@
       pinnedSlot.innerHTML = '';
     }
 
-    const rankedKey = (showAllRows ? 'all:' : 'top:') + ranked.map(e => e._id || e.at).join(',');
+    // Every fetched entry gets rendered — how many are actually visible
+    // is decided by CSS/refreshOverflowState below, not by a hardcoded
+    // count, so this naturally adapts to whatever height the panel has.
+    const rankedKey = sorted.map(e => e._id || e.at).join(',');
     if(rankedKey === historyRenderKey){
       refreshRelativeTimes();
     } else {
       historyRenderKey = rankedKey;
       historyList.innerHTML = '';
-      ranked.forEach((entry, i) => {
+      sorted.forEach((entry, i) => {
         const li = document.createElement('li');
         const isMine = entry.player === playerName;
         li.className = 'history-row' + rankClass(i) + (isMine ? ' mine' : '');
@@ -647,8 +694,8 @@
       });
     }
 
-    showMoreBtn.hidden = sorted.length <= HISTORY_LIMIT;
-    showMoreBtn.textContent = showAllRows ? 'Show top 10' : `Show all (${sorted.length})`;
+    // Measure after the browser has laid the rows out.
+    requestAnimationFrame(refreshOverflowState);
   }
 
   // --- timer ---
